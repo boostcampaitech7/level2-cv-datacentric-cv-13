@@ -89,6 +89,8 @@ class SceneTextDataset(Dataset):
 
         #image, vertices = resize_img(image, vertices, self.image_size)
         #image, vertices = adjust_height(image, vertices)
+        
+        image, vertices = crop_img_custom(image, vertices)
 
         image, vertices = longest_max_size_transform(image, vertices, self.image_size)
         image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(0,0,0))
@@ -97,11 +99,22 @@ class SceneTextDataset(Dataset):
         image, vertices = crop_img(image, vertices, labels, self.crop_size)
 
         vertices, labels = filter_vertices(
-            vertices,
-            labels,
+            vertices,labels,
             ignore_under=self.ignore_under_threshold,
             drop_under=self.drop_under_threshold
         )
+        image, vertices = longest_max_size_transform(image, vertices, self.image_size)
+        image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(0,0,0))
+        image, vertices = random_scale(image, vertices, scale_range=(0.6, 0.75))
+        vertices, labels = filter_vertices(
+            vertices,labels,
+            ignore_under=self.ignore_under_threshold,
+            drop_under=self.drop_under_threshold
+        )
+        image, vertices = rotate_img(image, vertices)
+        image, vertices = crop_img(image, vertices, labels, self.crop_size)
+
+
 
         if image.mode != 'RGB':
             image = image.convert('RGB')

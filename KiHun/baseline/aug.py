@@ -111,9 +111,10 @@ def rotate_img(img, vertices, angle_range=10):
         new_vertices[i,:] = rotate_vertices(vertice, -angle / 180 * math.pi, np.array([[center_x],[center_y]]))
     return img, new_vertices
 
-def pad_if_needed(image, vertices, min_height, min_width, position='top_left', pad_value=(0, 0, 0)):
+def pad_if_needed(image, vertices, min_height, min_width, position='center', pad_value=(0, 0, 0)):
     # Get the original dimensions
-    original_height, original_width = image.size
+    original_height = image.height
+    original_width = image.width
 
     # Calculate the padding amounts
     pad_height = max(0, min_height - original_height)
@@ -148,8 +149,10 @@ def pad_if_needed(image, vertices, min_height, min_width, position='top_left', p
 
     # Update the vertices based on the padding
     updated_vertices = vertices.copy()
-    updated_vertices[0::2] += left  # Update x-coordinates
-    updated_vertices[1::2] += top   # Update y-coordinates
+    for idx, vertice in enumerate(vertices):
+        for i in range(0, len(vertice), 2):
+            updated_vertices[idx][i] += left  # Update x-coordinates
+            updated_vertices[idx][i+1] += top   # Update y-coordinates
 
     return new_image, updated_vertices
 
@@ -185,3 +188,35 @@ def random_scale(image, vertices, scale_range=(0.8, 1.2)):
     updated_vertices = vertices * scale_factor
 
     return scaled_image, updated_vertices
+
+def crop_img_custom(image, vertices):
+
+    x_coords = vertices[:,[0,2,4,6]].flatten()
+    y_coords = vertices[:,[1,3,5,7]].flatten()
+
+    # 최소 및 최대 x, y 좌표 계산
+    min_x, min_y = np.min(x_coords), np.min(y_coords)
+    max_x, max_y = np.max(x_coords), np.max(y_coords)
+    
+    h, w = image.size[1], image.size[0]  
+    crop_w, crop_h = max_x - min_x, max_y - min_y
+    
+    # 이미지 크기에 따라 여백 비율 조정
+    width_margin = int((w - crop_w) * 0.05)  # 너비 여백을 이미지 너비의 5%로 설정
+    height_margin = int((h - crop_h) * 0.1)  # 높이 여백을 이미지 높이의 10%로 설정
+
+    # 여백을 포함하여 새로운 크롭 좌표 설정
+    new_min_x = max(0, min_x - width_margin)
+    new_max_x = min(w, max_x + width_margin)
+    new_min_y = max(0, min_y - height_margin)
+    new_max_y = min(h, max_y + height_margin)
+
+    image = image.crop([new_min_x, new_min_y, new_max_x, new_max_y])
+
+    new_vertices = vertices.copy()  # vertices 배열을 복사하여 새로운 배열에 저장
+    for idx, vertice in enumerate(vertices):
+        for i in range(0, len(vertice), 2):
+            new_vertices[idx][i] -= new_min_x  # x 좌표에서 new_min_x만큼 뺌
+            new_vertices[idx][i+1] -= new_min_y  # y 좌표에서 new_min_y만큼 뺌
+
+    return image, new_vertices
