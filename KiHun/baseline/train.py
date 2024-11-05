@@ -7,13 +7,10 @@ import math
 import matplotlib.pyplot as plt
 
 from torch import cuda
-from torch.utils.data import DataLoader, Subset
-from torch.optim import Adam
-from torch.optim.lr_scheduler import MultiStepLR
-from torchmetrics import Precision, Recall, F1Score  # 추가된 torchmetrics
+from torch.utils.data import DataLoader
 
 from east_dataset import EASTDataset
-from dataset import SceneTextDataset, PickleDataset
+from dataset_pickle import PickleDataset, load_pickle_files
 
 from detect import get_bboxes
 
@@ -22,17 +19,16 @@ import pytorch_lightning as pl
 
 from argparse import ArgumentParser
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw
 
-import random
 import wandb
 
 import shutil
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/[2048]_cs[1024]/train/")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/[1024]/valid/")  
+    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/")  
+    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/2048/")  
     # Conventional args
     '''parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
@@ -40,11 +36,13 @@ def parse_args():
     
     parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--train_num_workers', type=int, default=4)
+    parser.add_argument('--valid_num_workers', type=int, default=4)
 
     parser.add_argument('--image_size', type=int, default=2048)
     parser.add_argument('--input_size', type=int, default=1024)
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--valid_batch_size', type=int, default=4)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=150)
     #parser.add_argument('--save_interval', type=int, default=5)
@@ -65,28 +63,6 @@ def wandb_setup(config):
         project="project3_test_run",
         config=config
     )
-
-def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
-    # 0부터 399까지의 파일 인덱스를 생성하고 무작위로 섞기
-    indices = list(range(0, total_files))
-
-    random.seed(42)
-    random.shuffle(indices)
-
-    # 80%는 train, 20%는 valid로 할당
-    train_indices = indices[:int(total_files * train_ratio)]
-    valid_indices = indices[int(total_files * train_ratio):]
-
-    # 파일 경로 생성
-    train_files = [os.path.join(train_dir, f"{idx}.pkl") for idx in train_indices]
-    valid_files = [os.path.join(valid_dir, f"{idx}.pkl") for idx in valid_indices]
-
-    return train_files, valid_files
-
-    #train_pickle = PickleDataset(file_list=train_files, data_type='train')
-    #valid_pickle = PickleDataset(file_list=valid_files, data_type='valid')
-
-    #return train_pickle, valid_pickle
 
 def check_dataloader(dataloader):
 
@@ -122,31 +98,25 @@ def check_dataloader(dataloader):
                 pts = [(int(p[0]), int(p[1])) for p in bbox]
                 draw.polygon(pts, outline=(255, 0, 0))                
 
-            image_name = f'{batch_idx*1+image_idx}th_aug_image.png'
+            image_name = f'{batch_idx*dataloader.batch_size+image_idx}th_aug_image.png'
             image_sample.save(os.path.join(save_dir, image_name))
             print(f"Created: {image_name}")
 
 def main():
     args = parse_args()
 
-    # train과 valid 경로의 파일을 각각 나눔
+    #train과 valid 경로의 파일을 각각 나눔
     train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
 
-    # Dataset 생성
-    train_dataset = PickleDataset(train_files)
-    valid_dataset = PickleDataset(valid_files)
- 
+    train_pickle = PickleDataset(file_list=train_files, data_type='train', input_image=args.input_size, normalize=not args.checkaug)
+    valid_pickle = PickleDataset(file_list=valid_files, data_type='valid', input_image=args.image_size, normalize=not args.checkaug)
 
-    # train과 valid 경로의 파일을 각각 나눔
-    #train_pickle, valid_pickle = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
-
-    # Dataset 생성
-    #train_dataset = EASTDataset(train_pickle, map_scale=1.0)
-    #valid_dataset = EASTDataset(valid_pickle, map_scale=1.0)
+    #Dataset 생성
+    train_dataset, valid_dataset = EASTDataset(train_pickle), EASTDataset(valid_pickle)
 
     # DataLoader 설정
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True)
-    val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=args.train_num_workers, shuffle=True)
+    val_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, num_workers=args.valid_num_workers, shuffle=False)
 
     if args.checkaug:
         check_dataloader(train_loader)
