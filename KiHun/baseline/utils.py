@@ -88,22 +88,15 @@ def get_rotate_mat(theta):
     '''positive theta value means rotate clockwise'''
     return np.array([[math.cos(theta), -math.sin(theta)], [math.sin(theta), math.cos(theta)]])
 
-
-def rotate_vertices(vertices, theta, anchor=None):
-    '''rotate vertices around anchor
-    Input:
-        vertices: vertices of text region <numpy.ndarray, (8,)>
-        theta   : angle in radian measure
-        anchor  : fixed position during rotation
-    Output:
-        rotated vertices <numpy.ndarray, (8,)>
-    '''
-    v = vertices.reshape((4,2)).T
-    if anchor is None:
-        anchor = v[:,:1]
-    rotate_mat = get_rotate_mat(theta)
-    res = np.dot(rotate_mat, v - anchor)
-    return (res + anchor).T.reshape(-1)
+@njit
+def rotate_vertices(vertices, angle, center):
+    cos_theta, sin_theta = math.cos(angle), math.sin(angle)
+    rotated_vertices = np.zeros(vertices.shape)
+    for i in range(0, len(vertices), 2):
+        x, y = vertices[i] - center[0], vertices[i + 1] - center[1]
+        rotated_vertices[i] = x * cos_theta - y * sin_theta + center[0]
+        rotated_vertices[i + 1] = x * sin_theta + y * cos_theta + center[1]
+    return rotated_vertices
 
 @njit
 def get_boundary(vertices):
@@ -190,48 +183,144 @@ def rotate_all_pixels(rotate_mat, anchor_x, anchor_y, length):
     rotated_y = rotated_coord[1, :].reshape(y.shape)
     return rotated_x, rotated_y
     
-def generate_roi_mask(image, vertices, labels):
+# def generate_roi_mask(image, vertices, labels):
+#     mask = np.ones(image.shape[:2], dtype=np.float32)
+#     ignored_polys = []
+#     for vertice, label in zip(vertices, labels):
+#         if label == 0:
+#             ignored_polys.append(np.around(vertice.reshape((4, 2))).astype(np.int32))
+#     cv2.fillPoly(mask, ignored_polys, 0)
+#     return mask
+
+@njit
+def generate_roi_mask(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray):
     mask = np.ones(image.shape[:2], dtype=np.float32)
-    ignored_polys = []
+
     for vertice, label in zip(vertices, labels):
         if label == 0:
-            ignored_polys.append(np.around(vertice.reshape((4, 2))).astype(np.int32))
-    cv2.fillPoly(mask, ignored_polys, 0)
+            fill_polygon(mask, vertice, 0)
+
     return mask
 
-def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
-    if drop_under == 0 and ignore_under == 0:
-        return vertices, labels
+@njit
+def fill_polygon(mask, polygon, value):
+    # 다각형의 bounding box를 계산합니다.
+    min_x, max_x = np.min(polygon[::2]), np.max(polygon[::2])
+    min_y, max_y = np.min(polygon[1::2]), np.max(polygon[1::2])
 
-    new_vertices, new_labels = vertices.copy(), labels.copy()
+    # bounding box 내의 각 점이 다각형 내부에 있는지 확인
+    for y in range(max(0, min_y), min(mask.shape[0], max_y + 1)):
+        for x in range(max(0, min_x), min(mask.shape[1], max_x + 1)):
+            if point_in_polygon(x, y, polygon):
+                mask[y, x] = value
 
-    areas = np.array([Polygon(v.reshape((4, 2))).convex_hull.area for v in vertices])
-    labels[areas < ignore_under] = 0
+@njit
+def point_in_polygon(x, y, polygon):
+    # point-in-polygon (PIP) 알고리즘: Ray-casting 기법 사용
+    num_points = polygon.shape[0] // 2  # 꼭짓점 개수를 2로 나누어 계산
+    j = num_points - 1
+    odd_nodes = False
+    for i in range(num_points):
+        xi, yi = polygon[2*i], polygon[2*i+1]
+        xj, yj = polygon[2*j], polygon[2*j+1]
+        if ((yi < y <= yj) or (yj < y <= yi)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            odd_nodes = not odd_nodes
+        j = i
+    return odd_nodes
 
-    if drop_under > 0:
-        passed = areas >= drop_under
-        new_vertices, new_labels = new_vertices[passed], new_labels[passed]
+@njit
+def is_cross_text_bounding_box(start_loc, length, vertices):
+    """
+    Bounding Box를 이용하여 자유사변형과 사각형이 교차하는지 확인
 
-    return new_vertices, new_labels
+    Args:
+        start_loc (tuple): 사각형의 시작 좌표
+        length (int): 사각형의 한 변의 길이
+        vertices (np.ndarray): 자유사변형의 꼭짓점 좌표 (Nx2 배열)
+
+    Returns:
+        bool: 교차하면 True, 아니면 False
+    """
+
+    # 사각형의 Bounding Box 계산
+    rect_min_x, rect_min_y = start_loc
+    rect_max_x = rect_min_x + length
+    rect_max_y = rect_min_y + length
+
+    # 자유사변형의 Bounding Box 계산
+    poly_min_x = np.min(vertices[:, 0])
+    poly_max_x = np.max(vertices[:, 0])
+    poly_min_y = np.min(vertices[:, 1])
+    poly_max_y = np.max(vertices[:, 1])
+
+    # 두 Bounding Box가 겹치는지 확인
+    return (rect_min_x <= poly_max_x and poly_min_x <= rect_max_x) and \
+           (rect_min_y <= poly_max_y and poly_min_y <= rect_max_y)
 
 def is_cross_text(start_loc, length, vertices):
-    '''check if the crop image crosses text regions
-    Input:
-        start_loc: left-top position
-        length   : length of crop image
-        vertices : vertices of text regions <numpy.ndarray, (n,8)>
-    Output:
-        True if crop image crosses text region
-    '''
     if vertices.size == 0:
         return False
     start_w, start_h = start_loc
-    a = np.array([start_w, start_h, start_w + length, start_h, start_w + length, start_h + length,
-                  start_w, start_h + length]).reshape((4, 2))
-    p1 = Polygon(a).convex_hull
+    crop_box = np.array([
+        [start_w, start_h],
+        [start_w + length, start_h],
+        [start_w + length, start_h + length],
+        [start_w, start_h + length]
+    ])
+
+    p1 = Polygon(crop_box).convex_hull
     for vertice in vertices:
         p2 = Polygon(vertice.reshape((4, 2))).convex_hull
         inter = p1.intersection(p2).area
         if 0.01 <= inter / p2.area <= 0.99:
             return True
     return False
+
+@njit
+def polygon_area(vertices):
+    """
+    2D 자유사변형의 넓이를 삼각형 분할 및 벡터 외적을 이용하여 계산
+
+    Args:
+        vertices (np.ndarray): 자유사변형의 꼭짓점 좌표 (Nx8 배열)
+
+    Returns:
+        np.ndarray: 각 자유사변형의 넓이 (Nx1 배열)
+    """
+
+    n = vertices.shape[0]
+    areas = np.zeros(n)
+
+    for i in range(n):
+        # 꼭짓점 좌표를 reshape
+        v = vertices[i].reshape(4, 2)
+
+        # 삼각형 분할 (첫 번째 점을 기준으로)
+        for j in range(1, 3):
+            # 두 변의 벡터 계산
+            vec1 = v[j] - v[0]
+            vec2 = v[j+1] - v[0]
+
+            # 벡터 외적 (2D에서 z 성분만 계산)
+            cross_product = vec1[0] * vec2[1] - vec1[1] * vec2[0]
+
+            # 삼각형 넓이 계산 (절댓값)
+            area = 0.5 * np.abs(cross_product)
+            areas[i] += area
+
+    return areas
+
+@njit
+def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
+    if drop_under == 0 and ignore_under == 0:
+        return vertices, labels
+
+    new_vertices, new_labels = vertices.copy(), labels.copy()
+    areas = polygon_area(vertices)
+
+    labels[areas < ignore_under] = 0
+    if drop_under > 0:
+        passed = areas >= drop_under
+        new_vertices, new_labels = new_vertices[passed], new_labels[passed]
+
+    return new_vertices, new_labels

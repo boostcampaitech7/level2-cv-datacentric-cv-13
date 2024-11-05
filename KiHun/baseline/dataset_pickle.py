@@ -28,7 +28,9 @@ class PickleDataset(Dataset):
         return image
  
     def _train_augmentation(self, image, vertices, labels):
-    
+        
+        image = self._convert_to_rgb_numpy(image)
+        
         image, vertices = random_scale(image, vertices, scale_range=(0.6, 0.75))
         image, vertices = rotate_img(image, vertices)
         image, vertices = crop_img(image, vertices, labels, self.input_image)
@@ -37,8 +39,7 @@ class PickleDataset(Dataset):
             ignore_under=self.config_filter_vertices[0],
             drop_under=self.config_filter_vertices[1]
         )
-        image = self._convert_to_rgb_numpy(image)
-
+        
         # transform 적용
         if self.normalize is True:
             transform = A.Compose([A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
