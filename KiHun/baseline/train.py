@@ -27,14 +27,15 @@ import shutil
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/2048/")  
+    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/train")  
+    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/2048/valid")  
     # Conventional args
     '''parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
 
     
     parser.add_argument('--run_name', type=str)
+    parser.add_argument('--split_seed', type=int, default=42)
 
     parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
@@ -46,7 +47,7 @@ def parse_args():
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--valid_batch_size', type=int, default=4)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--max_epoch', type=int, default=200)
+    parser.add_argument('--max_epoch', type=int, default=150)
     #parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument("--amp", action="store_true", help="Enable AMP")
     parser.add_argument("--checkaug", action="store_true", help="check aug")
@@ -109,7 +110,7 @@ def main():
     args = parse_args()
 
     #train과 valid 경로의 파일을 각각 나눔
-    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
+    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir, args.split_seed)
 
     train_pickle = PickleDataset(file_list=train_files, data_type='train', input_image=args.input_size, normalize=not args.checkaug)
     valid_pickle = PickleDataset(file_list=valid_files, data_type='valid', input_image=args.image_size, normalize=not args.checkaug)

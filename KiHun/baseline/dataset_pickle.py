@@ -31,9 +31,9 @@ class PickleDataset(Dataset):
         
         image = self._convert_to_rgb_numpy(image)
         
-        image, vertices = random_scale(image, vertices, scale_range=(0.6, 0.75))
+        image, vertices = random_scale(image, vertices, scale_range=(0.5, 0.75))
         image, vertices = rotate_img(image, vertices)
-        image, vertices = crop_img(image, vertices, labels, self.input_image)
+        image, vertices, labels = crop_img2(image, vertices, labels, self.input_image)
         vertices, labels = filter_vertices(
             vertices,labels,
             ignore_under=self.config_filter_vertices[0],
@@ -79,29 +79,12 @@ class PickleDataset(Dataset):
 
     def __len__(self):
         return len(self.file_list)
-    
-def createPickles(data_dir, image_size):
-    train_dir = f'pickle/{image_size}/'
-    # 경로 폴더 생성
-    os.makedirs(os.path.join(data_dir, train_dir), exist_ok=True)
-    
-    train_dataset = SceneTextDataset(
-            root_dir=data_dir,
-            data_type='train',
-            image_size=image_size,
-        )
 
-    ds = len(train_dataset)
-    for k in tqdm(range(ds)):
-        data = train_dataset.__getitem__(k)
-        with open(file=os.path.join(data_dir, train_dir, f"{k}.pkl"), mode="wb") as f:
-            pickle.dump(data, f)
-
-def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
+def load_pickle_files(train_dir, valid_dir, split_seed, total_files=400, train_ratio=0.8):
     # 0부터 399까지의 파일 인덱스를 생성하고 무작위로 섞기
     indices = list(range(0, total_files))
 
-    random.seed(42)
+    random.seed(split_seed)
     random.shuffle(indices)
 
     # 80%는 train, 20%는 valid로 할당
@@ -114,11 +97,28 @@ def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
 
     return train_files, valid_files
 
+def createPickles(data_dir, data_type, image_size):
+    train_dir = f'pickle/{image_size}/{data_type}/'
+    # 경로 폴더 생성
+    os.makedirs(os.path.join(data_dir, train_dir), exist_ok=True)
+    
+    dataset = SceneTextDataset(
+            root_dir=data_dir,
+            data_type=data_type,
+            image_size=image_size,
+        )
+
+    ds = len(dataset)
+    for k in tqdm(range(ds)):
+        data = dataset.__getitem__(k)
+        with open(file=os.path.join(data_dir, train_dir, f"{k}.pkl"), mode="wb") as f:
+            pickle.dump(data, f)
+
 def main():
     data_dir = './data'
 
-    createPickles(data_dir, 1024)
-    createPickles(data_dir, 2048)
+    createPickles(data_dir, 'valid', 2048)
+    createPickles(data_dir, 'train', 2048)
     
         
 if __name__ == '__main__':

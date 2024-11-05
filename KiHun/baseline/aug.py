@@ -131,6 +131,55 @@ def longest_max_size_transform(img, vertices, size):
     return img, new_vertices
 
 @njit
+def crop_img2(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray, length: int):
+    h, w = image.shape[:2]
+
+    # 이미지 크기가 지정한 길이 이상이 되도록 조정
+    if h >= w and w < length:
+        new_w, new_h = length, int(h * length / w)
+    elif h < w and h < length:
+        new_w, new_h = int(w * length / h), length
+    else:
+        new_w, new_h = w, h
+
+    # 이미지 크기 조정
+    resized_image = np.zeros((new_h, new_w, image.shape[2]), dtype=image.dtype)
+    scale_x, scale_y = w / new_w, h / new_h
+    for i in range(new_h):
+        for j in range(new_w):
+            resized_image[i, j] = image[int(i * scale_y), int(j * scale_x)]
+    
+    ratio_w, ratio_h = new_w / w, new_h / h
+
+    # vertices 크기 조정
+    new_vertices = vertices.copy()
+    for i in range(vertices.shape[0]):
+        new_vertices[i, 0::2] *= ratio_w  # x 좌표들
+        new_vertices[i, 1::2] *= ratio_h  # y 좌표들
+
+    # 크롭할 영역 위치 선택
+    remain_w, remain_h = new_w - length, new_h - length
+
+    start_w = int(np.random.rand() * remain_w)
+    start_h = int(np.random.rand() * remain_h)
+
+    # 이미지 크롭
+    cropped_image = resized_image[start_h:start_h + length, start_w:start_w + length]
+
+    # vertices를 크롭된 이미지 기준으로 변환
+    for i in range(new_vertices.shape[0]):
+        new_vertices[i, 0::2] -= start_w  # x 좌표들
+        new_vertices[i, 1::2] -= start_h  # y 좌표들
+
+        # vertices가 크롭 영역을 벗어나면 label을 0으로 설정
+        if (np.any(new_vertices[i, 0::2] < 0) or np.any(new_vertices[i, 0::2] >= length) or
+            np.any(new_vertices[i, 1::2] < 0) or np.any(new_vertices[i, 1::2] >= length)):
+            labels[i] = 0
+
+    return cropped_image, new_vertices, labels
+
+
+@njit
 def crop_img(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray, length: int):
     h, w = image.shape[:2]
 
@@ -204,11 +253,22 @@ def rotate_img(image: np.ndarray, vertices: np.ndarray, angle_range=10):
             if 0 <= x < w and 0 <= y < h:
                 rotated_image[i, j] = image[int(y), int(x)]
 
-    # vertices 회전 적용
+    # vertices 회전 적용 및 필터링
     new_vertices = np.zeros(vertices.shape)
-    for i, vertice in enumerate(vertices):
-        new_vertices[i, :] = rotate_vertices(vertice, -radian, np.array([center_x, center_y]))
-    return rotated_image, new_vertices
+    valid_vertices = np.zeros(vertices.shape, dtype=vertices.dtype)  # 결과를 저장할 배열
+    valid_count = 0  # 유효한 vertices 개수를 셀 변수
+    for i in range(vertices.shape[0]):
+        rotated_vertice = rotate_vertices(vertices[i], -radian, np.array([center_x, center_y]))
+        new_vertices[i] = rotated_vertice
+
+        # 모든 점이 이미지 내부에 있는지 확인
+        if np.all((0 <= rotated_vertice[0::2]) & (rotated_vertice[0::2] < w) & 
+                  (0 <= rotated_vertice[1::2]) & (rotated_vertice[1::2] < h)):
+            valid_vertices[valid_count] = rotated_vertice
+            valid_count += 1
+
+    # 유효한 vertices만 반환
+    return rotated_image, valid_vertices[:valid_count]
 
 @njit
 def random_scale(image: np.ndarray, vertices: np.ndarray, scale_range=(0.8, 1.2)):

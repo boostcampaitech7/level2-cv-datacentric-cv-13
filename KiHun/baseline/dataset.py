@@ -77,16 +77,17 @@ class SceneTextDataset(Dataset):
         return vertices, labels
 
     def _preprocess(self, image, vertices, labels):
-        image, vertices = crop_img_custom(image, vertices)
-        vertices, labels = filter_vertices(
-            vertices,labels,
-            ignore_under=self.ignore_under_threshold,
-            drop_under=self.drop_under_threshold
-        )
+
+        if self.data_type == 'train':
+            image, vertices = crop_img_custom(image, vertices)
+            vertices, labels = filter_vertices(
+                vertices,labels,
+                ignore_under=self.ignore_under_threshold,
+                drop_under=self.drop_under_threshold
+            )
+
         image, vertices = longest_max_size_transform(image, vertices, self.image_size)
         image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(0,0,0))
-
-        image, vertices = crop_img(image, vertices, labels, self.image_size)
 
         return image, vertices, labels
 
