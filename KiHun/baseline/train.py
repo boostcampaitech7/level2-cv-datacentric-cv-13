@@ -97,7 +97,7 @@ def check_dataloader(dataloader):
                 pts = [(int(p[0]), int(p[1])) for p in bbox]
                 draw.polygon(pts, outline=(255, 0, 0))                
 
-            image_name = f'{batch_idx*8+image_idx}th_aug_image.png'
+            image_name = f'{batch_idx*1+image_idx}th_aug_image.png'
             image_sample.save(os.path.join(save_dir, image_name))
             print(f"Created: {image_name}")
 
@@ -172,7 +172,7 @@ def main():
         )
     valid_dataset = EASTDataset(valid_dataset)
     # DataLoader 설정
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=1, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False)
 
     if args.checkaug:
