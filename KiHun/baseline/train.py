@@ -15,18 +15,24 @@ from torchmetrics import Precision, Recall, F1Score  # 추가된 torchmetrics
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset, PickleDataset
 
+from detect import get_bboxes
+
 from model_lightning import EASTLightningModel
 import pytorch_lightning as pl
 
 from argparse import ArgumentParser
 
+from PIL import Image, ImageDraw, ImageOps
+
 import random
 import wandb
 
+import shutil
+
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/1024/")  
+    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/[2048]_cs[1024]/train/")  
+    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/[1024]/valid/")  
     # Conventional args
     '''parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
@@ -75,12 +81,21 @@ def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
     train_files = [os.path.join(train_dir, f"{idx}.pkl") for idx in train_indices]
     valid_files = [os.path.join(valid_dir, f"{idx}.pkl") for idx in valid_indices]
 
-    train_pickle = PickleDataset(file_list=train_files, data_type='train')
-    valid_pickle = PickleDataset(file_list=valid_files, data_type='valid')
+    return train_files, valid_files
 
-    return train_pickle, valid_pickle
+    #train_pickle = PickleDataset(file_list=train_files, data_type='train')
+    #valid_pickle = PickleDataset(file_list=valid_files, data_type='valid')
+
+    #return train_pickle, valid_pickle
 
 def check_dataloader(dataloader):
+
+    save_dir = 'visualize/'
+
+    if os.path.exists(save_dir):  
+        shutil.rmtree(save_dir)
+
+    os.makedirs(save_dir, exist_ok=True)    
 
     for file in os.listdir():
         if file.endswith('th_aug_image.png'):
@@ -88,35 +103,49 @@ def check_dataloader(dataloader):
             print(f"Deleted: {file}")
 
     # DataLoader를 통해 증강된 이미지 확인하기
-    for batch_idx, (images, score_maps, geo_maps, roi_masks) in enumerate(dataloader):
+    for batch_idx, (images, score_maps, geo_maps, _) in enumerate(dataloader):
 
-        for image_idx, (image, score_map, geo_map, roi_mask) in enumerate(zip(images, score_maps, geo_maps, roi_masks)):
-            image_sample = image.permute(1, 2, 0).numpy()  # [C, H, W] -> [H, W, C]로 변환
-            image_sample = (image_sample * 0.5 + 0.5).clip(0, 1)
+        for image_idx, (image, score_map, geo_map) in enumerate(zip(images, score_maps, geo_maps)):
+            bboxes=get_bboxes(score_map.numpy(), geo_map.numpy())
+            if bboxes is None:
+                bboxes = np.zeros((0, 4, 2), dtype=np.float32)
+            else:
+                bboxes = bboxes[:, :8].reshape(-1, 4, 2)
 
-            # 마스크 윤곽선 강조
-            contours, hierarchy = cv2.findContours(roi_mask.permute(1,2,0).numpy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(image_sample, contours, -1, (0, 255, 0), 2)  # 초록색으로 윤곽선 표시
+
+            image_sample = image.permute(1, 2, 0).numpy().astype(np.uint8)
+            image_sample = Image.fromarray(image_sample)  # [C, H, W] -> [H, W, C]로 변환
+
+            draw = ImageDraw.Draw(image_sample)
+            for bbox in bboxes:
+                # bbox points
+                pts = [(int(p[0]), int(p[1])) for p in bbox]
+                draw.polygon(pts, outline=(255, 0, 0))                
 
             image_name = f'{batch_idx*8+image_idx}th_aug_image.png'
-
-            plt.imsave(image_name, image_sample)
+            image_sample.save(os.path.join(save_dir, image_name))
             print(f"Created: {image_name}")
 
 def main():
     args = parse_args()
 
-    torch.cuda.empty_cache()
-
     # train과 valid 경로의 파일을 각각 나눔
-    train_pickle, valid_pickle = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
+    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
 
     # Dataset 생성
-    train_dataset = EASTDataset(train_pickle)
-    valid_dataset = EASTDataset(valid_pickle)
+    train_dataset = PickleDataset(train_files)
+    valid_dataset = PickleDataset(valid_files)
+ 
+
+    # train과 valid 경로의 파일을 각각 나눔
+    #train_pickle, valid_pickle = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
+
+    # Dataset 생성
+    #train_dataset = EASTDataset(train_pickle, map_scale=1.0)
+    #valid_dataset = EASTDataset(valid_pickle, map_scale=1.0)
 
     # DataLoader 설정
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=args.num_workers, shuffle=True)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False)
 
     if args.checkaug:
