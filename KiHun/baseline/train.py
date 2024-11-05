@@ -13,7 +13,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torchmetrics import Precision, Recall, F1Score  # 추가된 torchmetrics
 
 from east_dataset import EASTDataset
-from dataset import SceneTextDataset, PickleDataset
+from dataset import SceneTextDataset
 
 from detect import get_bboxes
 
@@ -22,7 +22,7 @@ import pytorch_lightning as pl
 
 from argparse import ArgumentParser
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw
 
 import random
 import wandb
@@ -31,12 +31,9 @@ import shutil
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/[2048]_cs[1024]/train/")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/[1024]/valid/")  
     # Conventional args
-    '''parser.add_argument('--data_dir', type=str,
-                        default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
-
+    parser.add_argument('--data_dir', type=str,
+                        default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))
     
     parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
@@ -65,28 +62,6 @@ def wandb_setup(config):
         project="project3_test_run",
         config=config
     )
-
-def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
-    # 0부터 399까지의 파일 인덱스를 생성하고 무작위로 섞기
-    indices = list(range(0, total_files))
-
-    random.seed(42)
-    random.shuffle(indices)
-
-    # 80%는 train, 20%는 valid로 할당
-    train_indices = indices[:int(total_files * train_ratio)]
-    valid_indices = indices[int(total_files * train_ratio):]
-
-    # 파일 경로 생성
-    train_files = [os.path.join(train_dir, f"{idx}.pkl") for idx in train_indices]
-    valid_files = [os.path.join(valid_dir, f"{idx}.pkl") for idx in valid_indices]
-
-    return train_files, valid_files
-
-    #train_pickle = PickleDataset(file_list=train_files, data_type='train')
-    #valid_pickle = PickleDataset(file_list=valid_files, data_type='valid')
-
-    #return train_pickle, valid_pickle
 
 def check_dataloader(dataloader):
 
@@ -126,26 +101,78 @@ def check_dataloader(dataloader):
             image_sample.save(os.path.join(save_dir, image_name))
             print(f"Created: {image_name}")
 
+import json
+
+def load_data(data_dir, test_size = 0.2):
+    def load_annotations(data_dir):
+        lang_list = ['chinese', 'japanese', 'thai', 'vietnamese']
+
+        total_anno = dict()
+        for nation in lang_list:
+            with open(os.path.join(data_dir, '{}_receipt/ufo/train.json'.format(nation)), 'r', encoding='utf-8') as f:
+                anno = json.load(f)
+            for im in anno['images']:
+                total_anno[im] = anno['images'][im]
+
+        return total_anno
+    
+    def infer_dir(fname):
+        lang_indicator = fname.split('.')[1]
+        if lang_indicator == 'zh':
+            lang = 'chinese'
+        elif lang_indicator == 'ja':
+            lang = 'japanese'
+        elif lang_indicator == 'th':
+            lang = 'thai'
+        elif lang_indicator == 'vi':
+            lang = 'vietnamese'
+
+        return os.path.join(data_dir, f'{lang}_receipt', 'img', 'train')
+
+    total_anno = load_annotations(data_dir)
+    for image_fname in total_anno.keys():
+        image_fpath = os.path.join(infer_dir(image_fname), image_fname)
+        total_anno[image_fname]['image_path']=image_fpath
+
+    data_list = list(total_anno.values())
+    
+    random.seed(42)
+    random.shuffle(data_list)
+
+    # 전체 데이터 개수
+    total_size = len(data_list)
+
+    # 테스트 데이터 개수 계산
+    test_size = int(total_size * test_size)
+
+    # 학습 데이터와 테스트 데이터 분리
+    train_list = data_list[:-test_size]
+    test_list = data_list[-test_size:]
+
+    return train_list, test_list
+
 def main():
     args = parse_args()
 
-    # train과 valid 경로의 파일을 각각 나눔
-    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
+    train_list, valid_list = load_data(args.data_dir)
 
-    # Dataset 생성
-    train_dataset = PickleDataset(train_files)
-    valid_dataset = PickleDataset(valid_files)
- 
+    train_dataset = SceneTextDataset(
+            train_list,
+            data_type='train',
+            image_size=args.image_size,
+            crop_size=args.input_size,
+        )
+    train_dataset = EASTDataset(train_dataset)
 
-    # train과 valid 경로의 파일을 각각 나눔
-    #train_pickle, valid_pickle = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
-
-    # Dataset 생성
-    #train_dataset = EASTDataset(train_pickle, map_scale=1.0)
-    #valid_dataset = EASTDataset(valid_pickle, map_scale=1.0)
-
+    valid_dataset = SceneTextDataset(
+            valid_list,
+            data_type='valid',
+            image_size=args.input_size,
+            crop_size=args.input_size,
+        )
+    valid_dataset = EASTDataset(valid_dataset)
     # DataLoader 설정
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=args.num_workers, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=1, shuffle=True)
     val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False)
 
     if args.checkaug:
