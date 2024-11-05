@@ -1,9 +1,10 @@
 import os
 import torch
 import numpy as np
+import cv2
 
 import math
-import pytorch_lightning as pl
+import matplotlib.pyplot as plt
 
 from torch import cuda
 from torch.utils.data import DataLoader, Subset
@@ -12,30 +13,26 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torchmetrics import Precision, Recall, F1Score  # 추가된 torchmetrics
 
 from east_dataset import EASTDataset
-from dataset_new import SceneTextDataset, PickleDataset
+from dataset import SceneTextDataset, PickleDataset
 
-from model import EAST
+from model_lightning import EASTLightningModel
+import pytorch_lightning as pl
 
-from datetime import timedelta
 from argparse import ArgumentParser
 
-import wandb
-
-from deteval import calc_deteval_metrics
-from detect import get_bboxes
-
 import random
+import wandb
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('--train_dataset_dir', type=str,default="/data/ephemeral/home/code/data/pickle/[2048]_cs[1024]/train/")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="/data/ephemeral/home/code/data/pickle/[1024]/valid/")  
+    parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/")  
+    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/1024/")  
     # Conventional args
     '''parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
 
     
-    parser.add_argument('--checkpoint_dir', type=str,default="./code/trained_models")  
+    parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
     parser.add_argument('--num_workers', type=int, default=4)
 
@@ -46,6 +43,7 @@ def parse_args():
     parser.add_argument('--max_epoch', type=int, default=150)
     #parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument("--amp", action="store_true", help="Enable AMP")
+    parser.add_argument("--checkaug", action="store_true", help="check aug")
     parser.add_argument("--nowandb", action="store_true", help="disable wandb")
 
     args = parser.parse_args()
@@ -77,112 +75,33 @@ def load_pickle_files(train_dir, valid_dir, total_files=400, train_ratio=0.8):
     train_files = [os.path.join(train_dir, f"{idx}.pkl") for idx in train_indices]
     valid_files = [os.path.join(valid_dir, f"{idx}.pkl") for idx in valid_indices]
 
-    return train_files, valid_files
+    train_pickle = PickleDataset(file_list=train_files, data_type='train')
+    valid_pickle = PickleDataset(file_list=valid_files, data_type='valid')
 
-class EASTLightningModel(pl.LightningModule):
-    def __init__(self, image_size, input_size, learning_rate, max_epoch, nowandb):
-        super().__init__()
-        self.model = EAST()
-        self.image_size = image_size
-        self.input_size = input_size
-        self.learning_rate = learning_rate
-        self.max_epoch = max_epoch
-        self.nowandb = nowandb
+    return train_pickle, valid_pickle
 
-        self.epoch_loss = []
+def check_dataloader(dataloader):
 
-        self.val_precisions = []
-        self.val_recalls = []
-        self.val_f1s = []
+    for file in os.listdir():
+        if file.endswith('th_aug_image.png'):
+            os.remove(file)
+            print(f"Deleted: {file}")
 
-    def _update_validation_metrics(self, metrics):
-        self.val_precisions.append(metrics['precision'])
-        self.val_recalls.append(metrics['recall'])
-        self.val_f1s.append(metrics['hmean'])
+    # DataLoader를 통해 증강된 이미지 확인하기
+    for batch_idx, (images, score_maps, geo_maps, roi_masks) in enumerate(dataloader):
 
-    def _get_bboxes_dict(self, score_maps, geo_maps, orig_sizes, input_size):
+        for image_idx, (image, score_map, geo_map, roi_mask) in enumerate(zip(images, score_maps, geo_maps, roi_masks)):
+            image_sample = image.permute(1, 2, 0).numpy()  # [C, H, W] -> [H, W, C]로 변환
+            image_sample = (image_sample * 0.5 + 0.5).clip(0, 1)
 
-        score_maps = score_maps.cpu().numpy()
-        geo_maps = geo_maps.cpu().numpy()
+            # 마스크 윤곽선 강조
+            contours, hierarchy = cv2.findContours(roi_mask.permute(1,2,0).numpy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(image_sample, contours, -1, (0, 255, 0), 2)  # 초록색으로 윤곽선 표시
 
-        by_sample_bboxes = []
-        for score_map, geo_map, orig_size in zip(score_maps, geo_maps, orig_sizes):
+            image_name = f'{batch_idx*8+image_idx}th_aug_image.png'
 
-            bboxes = get_bboxes(score_map, geo_map)
-            if bboxes is None:
-                bboxes = np.zeros((0, 4, 2), dtype=np.float32)
-            else:
-                bboxes = bboxes[:, :8].reshape(-1, 4, 2)
-                bboxes *= max(orig_size) / input_size
-
-            by_sample_bboxes.append(bboxes)
-    
-        return dict(enumerate(by_sample_bboxes))
-
-    def forward(self, x):
-        return self.model(x)
-
-    def training_step(self, batch, batch_idx):
-        img, gt_score_map, gt_geo_map, roi_mask = batch
-        loss, extra_info = self.model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
-        val_dict = {
-            'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
-            'IoU loss': extra_info['iou_loss']
-        }
-        self.epoch_loss.append(loss.item())
-        self.log('train_loss', loss)
-        if not self.nowandb:
-            wandb.log(val_dict)
-        return loss
-
-    def on_train_epoch_end(self):
-        mean_loss = np.array(self.epoch_loss).mean()
-        if not self.nowandb:
-            wandb.log({"Mean loss": mean_loss})
-
-        self.epoch_loss.clear()
-
-    def validation_step(self, batch, batch_idx):
-        img, gt_score_map, gt_geo_map, roi_mask = batch
-        _, extra_info = self.model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
-
-        pred_score_map = extra_info["score_map"]
-        pred_geo_map = extra_info["geo_map"]
-
-        orig_sizes = [image.shape[-3:] for image in img]
-
-        gt_bboxes_dict = self._get_bboxes_dict(gt_score_map, gt_geo_map, orig_sizes, self.input_size)
-        pred_bboxes_dict = self._get_bboxes_dict(pred_score_map, pred_geo_map, orig_sizes, self.input_size)
-
-        metrics = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict)['total']
-        self._update_validation_metrics(metrics)
-
-        # 결과 반환 (손실 없이 metric에만 집중)
-        return {'val_precision': metrics['precision'], 'val_recall': metrics['recall'], 'val_f1': metrics['hmean']}
-
-    def on_validation_epoch_end(self):
-        # 모든 batch에서 얻은 precision, recall, f1 metric의 평균 계산
-        precision = np.array(self.val_precisions).mean()
-        recall = np.array(self.val_recalls).mean()
-        f1 = np.array(self.val_f1s).mean()
-
-        # wandb와 로그에 기록
-        if not self.nowandb:
-            wandb.log({"val_precision": precision, "val_recall": recall, "val_f1": f1})
-
-        self.log("val_precision", precision)
-        self.log("val_recall", recall)
-        self.log("val_f1", f1)
-
-        self.val_precisions.clear()
-        self.val_recalls.clear()
-        self.val_f1s.clear()
-
-    def configure_optimizers(self):
-        optimizer = Adam(self.model.parameters(), lr=self.learning_rate)
-        scheduler = MultiStepLR(optimizer, milestones=[self.max_epoch // 2], gamma=0.1)
-        return [optimizer], [scheduler]
-
+            plt.imsave(image_name, image_sample)
+            print(f"Created: {image_name}")
 
 def main():
     args = parse_args()
@@ -190,14 +109,19 @@ def main():
     torch.cuda.empty_cache()
 
     # train과 valid 경로의 파일을 각각 나눔
-    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
+    train_pickle, valid_pickle = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir)
 
     # Dataset 생성
-    train_dataset = PickleDataset(train_files)
-    valid_dataset = PickleDataset(valid_files)
+    train_dataset = EASTDataset(train_pickle)
+    valid_dataset = EASTDataset(valid_pickle)
+
     # DataLoader 설정
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True)
-    val_loader = DataLoader(valid_dataset, batch_size=1, num_workers=4, shuffle=False)
+    val_loader = DataLoader(valid_dataset, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False)
+
+    if args.checkaug:
+        check_dataloader(train_loader)
+        return
 
     model = EASTLightningModel(
         args.image_size, 
@@ -211,7 +135,7 @@ def main():
         max_epochs=args.max_epoch,
         devices=1,
         accelerator="gpu",
-        check_val_every_n_epoch=1,
+        check_val_every_n_epoch=5,
         num_sanity_val_steps=0,
         precision=16 if args.amp else 32  # AMP를 위한 precision 설정
     )

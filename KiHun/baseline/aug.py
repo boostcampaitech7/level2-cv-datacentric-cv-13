@@ -14,7 +14,8 @@ import albumentations as A
 from torch.utils.data import Dataset
 from shapely.geometry import Polygon
 from numba import njit
-from utils import *
+
+from utils import rotate_vertices, is_cross_text
 
 def crop_img(img, vertices, labels, length):
     '''crop img patches to obtain batch and augment
