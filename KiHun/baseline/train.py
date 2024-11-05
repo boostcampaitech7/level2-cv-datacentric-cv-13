@@ -34,17 +34,19 @@ def parse_args():
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
 
     
+    parser.add_argument('--run_name', type=str)
+
     parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
-    parser.add_argument('--train_num_workers', type=int, default=4)
+    parser.add_argument('--train_num_workers', type=int, default=8)
     parser.add_argument('--valid_num_workers', type=int, default=4)
 
     parser.add_argument('--image_size', type=int, default=2048)
     parser.add_argument('--input_size', type=int, default=1024)
-    parser.add_argument('--train_batch_size', type=int, default=4)
+    parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--valid_batch_size', type=int, default=4)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--max_epoch', type=int, default=150)
+    parser.add_argument('--max_epoch', type=int, default=200)
     #parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument("--amp", action="store_true", help="Enable AMP")
     parser.add_argument("--checkaug", action="store_true", help="check aug")
@@ -58,9 +60,11 @@ def parse_args():
     return args
 
 def wandb_setup(config):
-
+    run_name = config.pop('run_name', None)  # 'run_name'이 있으면 가져오고 없으면 None
+    
     wandb.init(
         project="project3_test_run",
+        name=run_name,  # run_name이 None이면 wandb에서 자동으로 무시
         config=config
     )
 
@@ -87,7 +91,6 @@ def check_dataloader(dataloader):
                 bboxes = np.zeros((0, 4, 2), dtype=np.float32)
             else:
                 bboxes = bboxes[:, :8].reshape(-1, 4, 2)
-
 
             image_sample = image.permute(1, 2, 0).numpy().astype(np.uint8)
             image_sample = Image.fromarray(image_sample)  # [C, H, W] -> [H, W, C]로 변환
