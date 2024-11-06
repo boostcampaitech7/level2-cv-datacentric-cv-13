@@ -87,6 +87,7 @@ class SceneTextDataset(Dataset):
                 ignore_under=self.ignore_under_threshold,
                 drop_under=self.drop_under_threshold
             )
+            image, vertices = remove_separator(image, vertices, labels)
 
         image, vertices = longest_max_size_transform(image, vertices, self.image_size)
         image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(114,114,114))
@@ -99,7 +100,9 @@ class SceneTextDataset(Dataset):
 
         vertices, labels = self._load_annotations(image_fname)
         image = Image.open(image_fpath)
-
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+            
         image, vertices, labels = self._preprocess(image, vertices, labels)
 
         return image, vertices, labels

@@ -292,22 +292,33 @@ def remove_separator(img, vertices, labels):
 
 import colorsys
 
-def generate_lines(image_np, vertices, labels, line_type='random', thickness=(1,5), gap=(0,4)):
+def generate_lines(image_np, vertices, labels, line_type='random', thickness=(1,3), gap=(0,6)):
 
-    def draw_line(image_np, line_type, gap, point, color):
+    def draw_line(image_np, line_type, gap, point, color, thickness):
 
-        start_point, end_point = point
+        left_points, right_points = point
 
-        if line_type == 'dotted':
-            gap += 1
+        # 왼쪽과 오른쪽 점들의 중간점을 계산
+        start_point = (
+            int((left_points[0][0] + left_points[1][0]) // 2),
+            int((left_points[0][1] + left_points[1][1]) // 2)
+        )
+        end_point = (
+            int((right_points[0][0] + right_points[1][0]) // 2),
+            int((right_points[0][1] + right_points[1][1]) // 2)
+        )
+
+        if line_type == '.':
+            gap += 2
             for i in range(int(np.linalg.norm(np.subtract(end_point, start_point)) / gap)):
                 pos = (
                     int(start_point[0] + i * gap * (end_point[0] - start_point[0]) / np.linalg.norm(np.subtract(end_point, start_point))),
                     int(start_point[1] + i * gap * (end_point[1] - start_point[1]) / np.linalg.norm(np.subtract(end_point, start_point)))
                 )
-                cv2.circle(image_np, pos, thickness // 2, color, -1)
-        elif line_type == 'dashed': 
-            gap += 8
+                cv2.circle(image_np, pos, thickness // 2+1, color, -1)
+        elif line_type == '-': 
+            gap += 7
+            thickness //2 + 1
             for i in range(0, int(np.linalg.norm(np.subtract(end_point, start_point)) / gap), 2):
                 pos1 = (
                     int(start_point[0] + i * gap * (end_point[0] - start_point[0]) / np.linalg.norm(np.subtract(end_point, start_point))),
@@ -318,6 +329,48 @@ def generate_lines(image_np, vertices, labels, line_type='random', thickness=(1,
                     int(start_point[1] + (i + 1) * gap * (end_point[1] - start_point[1]) / np.linalg.norm(np.subtract(end_point, start_point)))
                 )
                 cv2.line(image_np, pos1, pos2, color, thickness)
+        elif line_type == '=':
+            offset = 2
+            thickness //2 + 1
+            start_point_upper = (start_point[0], start_point[1] - offset)
+            end_point_upper = (end_point[0], end_point[1] - offset)
+            start_point_lower = (start_point[0], start_point[1] + offset)
+            end_point_lower = (end_point[0], end_point[1] + offset)
+
+            gap += 7
+            for i in range(0, int(np.linalg.norm(np.subtract(end_point, start_point)) / gap), 2):
+                pos1 = (
+                    int(start_point_upper[0] + i * gap * (end_point_upper[0] - start_point_upper[0]) / np.linalg.norm(np.subtract(end_point_upper, start_point_upper))),
+                    int(start_point_upper[1] + i * gap * (end_point_upper[1] - start_point_upper[1]) / np.linalg.norm(np.subtract(end_point_upper, start_point_upper)))
+                )
+                pos2 = (
+                    int(start_point_upper[0] + (i + 1) * gap * (end_point_upper[0] - start_point_upper[0]) / np.linalg.norm(np.subtract(end_point_upper, start_point_upper))),
+                    int(start_point_upper[1] + (i + 1) * gap * (end_point_upper[1] - start_point_upper[1]) / np.linalg.norm(np.subtract(end_point_upper, start_point_upper)))
+                )
+                cv2.line(image_np, pos1, pos2, color, thickness)
+
+                pos1 = (
+                    int(start_point_lower[0] + i * gap * (end_point_lower[0] - start_point_lower[0]) / np.linalg.norm(np.subtract(end_point_lower, start_point_lower))),
+                    int(start_point_lower[1] + i * gap * (end_point_lower[1] - start_point_lower[1]) / np.linalg.norm(np.subtract(end_point_lower, start_point_lower)))
+                )
+                pos2 = (
+                    int(start_point_lower[0] + (i + 1) * gap * (end_point_lower[0] - start_point_lower[0]) / np.linalg.norm(np.subtract(end_point_lower, start_point_lower))),
+                    int(start_point_lower[1] + (i + 1) * gap * (end_point_lower[1] - start_point_lower[1]) / np.linalg.norm(np.subtract(end_point_lower, start_point_lower)))
+                )
+                cv2.line(image_np, pos1, pos2, color, thickness)
+
+
+        # elif line_type == '*':
+        #     thickness = 1
+        #     # `*` 모양을 일정한 간격으로 채우기 위해 회전 각도를 계산
+        #     line_length = np.linalg.norm(np.subtract(end_point, start_point))
+        #     angle = np.arctan2(end_point[1] - start_point[1], end_point[0] - start_point[0])
+        #     gap_distance = 10
+
+        #     for i in range(0, int(line_length), gap_distance):
+        #         x_offset = int(start_point[0] + i * np.cos(angle))
+        #         y_offset = int(start_point[1] + i * np.sin(angle))
+        #         cv2.putText(image_np, "*", (x_offset, y_offset), cv2.FONT_HERSHEY_PLAIN, 0.5, color, thickness)
         else:
             cv2.line(image_np, start_point, end_point, color, thickness)
 
@@ -337,15 +390,16 @@ def generate_lines(image_np, vertices, labels, line_type='random', thickness=(1,
         # RGB 값을 0~255 범위로 조정하여 반환
         return int(r*255), int(g*255), int(b*255)
     
-    thickness = random.randint(thickness[0], thickness[1])
-    line_type_list = ['dotted', 'dashed', 'line']
+    line_type_list = ['.', '-', '=', '--']
 
     for vertice, label in zip(vertices, labels):
         if label == 2:
             points = vertice.reshape(-1,2)
+            # x 좌표 기준으로 정렬하여 가장 좌측과 우측에 위치한 두 점을 구함
+            sorted_points = sorted(points, key=lambda p: p[0])
 
-            start_point = int((points[0][0] + points[3][0])//2), int((points[0][1]+points[3][1])//2)
-            end_point = int((points[1][0] + points[2][0])//2), int((points[1][1]+points[2][1])//2)
+            left_points = sorted_points[:2]
+            right_points = sorted_points[2:]
 
             line_type_per_line = line_type
             if line_type_per_line == 'random':
@@ -354,7 +408,8 @@ def generate_lines(image_np, vertices, labels, line_type='random', thickness=(1,
             draw_line(image_np = image_np,
                     line_type = line_type_per_line,
                     gap = random.randint(gap[0], gap[1]),
-                    point = (start_point, end_point),
-                    color = random_color(s=(0,20), v=(0,20)))
+                    point = (left_points, right_points),
+                    color = random_color(s=(0,25), v=(0,33)),
+                    thickness = random.randint(thickness[0], thickness[1]))
         
     return image_np

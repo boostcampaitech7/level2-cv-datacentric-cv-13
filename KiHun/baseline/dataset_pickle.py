@@ -21,18 +21,14 @@ class PickleDataset(Dataset):
 
         self.config_filter_vertices = [ignore_under_threshold, drop_under_threshold]
 
-    def _convert_to_rgb_numpy(self, image):
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        image = np.array(image)
-
-        return image
- 
     def _train_augmentation(self, image, vertices, labels):
-        image = self._convert_to_rgb_numpy(image)
+        image = np.array(image)
         
         image, vertices = random_scale(image, vertices, scale_range=(0.5, 1.0))
         image, vertices = rotate_img(image, vertices)
+        
+        image = generate_lines(image, vertices, labels)
+
         image, vertices, labels = crop_img2(image, vertices, labels, self.input_image)
 
         vertices, labels = filter_vertices(
@@ -40,9 +36,7 @@ class PickleDataset(Dataset):
             ignore_under=self.config_filter_vertices[0],
             drop_under=self.config_filter_vertices[1]
         )
-
-        image, vertices, labels = generate_lines(image, vertices, labels)
-
+  
         transform = [A.ColorJitter(hue=(-0.05,0.05), brightness=(0.75, 1.25), contrast=(0.75, 1.25), saturation=(0.6, 0.75))]
         # transform 적용
         if self.normalize is True:
@@ -54,8 +48,7 @@ class PickleDataset(Dataset):
 
     def _valid_augmentation(self, image, vertices, labels):
 
-        image = self._convert_to_rgb_numpy(image)
-
+        image = np.array(image)
         vertices = vertices.astype(np.float64)
 
          # transform 적용

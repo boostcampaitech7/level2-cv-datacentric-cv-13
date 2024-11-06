@@ -103,7 +103,7 @@ def main():
     val_loader = None if args.skip_valid else DataLoader(valid_dataset, batch_size=args.valid_batch_size, num_workers=args.valid_num_workers, shuffle=False)
 
     if args.checkaug:
-        check_dataloader(val_loader)
+        check_dataloader(train_loader)
         return
 
     model = EASTLightningModel(
