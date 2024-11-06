@@ -345,3 +345,192 @@ def random_scale(image: np.ndarray, vertices: np.ndarray, scale_range=(0.8, 1.2)
     updated_vertices = vertices * scale_factor
 
     return scaled_image, updated_vertices
+
+def sample_outer_colors(img_np, vertices, brightness_threshold):
+    """
+    각 꼭지점 주변의 바깥쪽에서 상대적인 밝기 임계값을 사용하여 배경에 가까운 색상을 샘플링합니다.
+    """
+    height, width, _ = img_np.shape
+    sampled_colors = []
+
+    vertices = vertices.reshape(-1, 2)  # (4, 2) 형태로 재구성
+
+    for (x, y) in vertices:
+        # 주변 바깥쪽의 여러 샘플링 좌표 계산 (더 많은 지점 샘플링)
+        offset_coords = [
+            (max(0, int(x - 10)), int(y)), (min(width - 1, int(x + 10)), int(y)),
+            (int(x), max(0, int(y - 10))), (int(x), min(height - 1, int(y + 10))),
+            (max(0, int(x - 7)), max(0, int(y - 7))), (min(width - 1, int(x + 7)), min(height - 1, int(y + 7))),
+            (max(0, int(x - 7)), min(height - 1, int(y + 7))), (min(width - 1, int(x + 7)), max(0, int(y - 7)))
+        ]
+
+        # 유효한 범위 내의 색상 샘플링
+        colors = [img_np[oy, ox] for ox, oy in offset_coords if 0 <= ox < width and 0 <= oy < height]
+        
+        # HSV 변환하여 밝기 기준으로 필터링 (동적 임계값 사용)
+        hsv_colors = [cv2.cvtColor(np.uint8([[color]]), cv2.COLOR_RGB2HSV)[0][0] for color in colors]
+        bright_colors = [colors[i] for i, hsv in enumerate(hsv_colors) if hsv[2] > brightness_threshold]
+
+        # 배경 색상으로 간주할 수 있는 중간 밝기 색상의 평균값 계산
+        avg_color = np.mean(bright_colors if bright_colors else colors, axis=0)
+        sampled_colors.append(tuple(avg_color.astype(int)))
+
+    return sampled_colors
+
+from scipy.interpolate import CubicSpline
+
+def radial_gradient_color(x, y, center_x, center_y, colors):
+    """
+    방사형 그라데이션을 적용하여 각 점의 색상을 계산합니다.
+    x, y: 현재 점의 좌표
+    center_x, center_y: 중심점의 좌표
+    colors: 각 꼭지점에서의 색상 (R, G, B)
+    """
+    # 중심점과 현재 점 사이의 거리 계산
+    distance = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+    
+    # 네 꼭지점의 색상에 대해 보간 (가장 가까운 색으로 점점 보간)
+    max_distance = np.sqrt((0 - center_x) ** 2 + (0 - center_y) ** 2)  # 최대 거리 (사각형 크기에 따라 조정 가능)
+    t = min(distance / max_distance, 1)  # 0과 1 사이로 거리 정규화
+
+    # 색상 보간: t가 0에 가까우면 첫 번째 색상에, 1에 가까우면 마지막 색상에 가까워지도록 보간
+    color_start = colors[0]
+    color_end = colors[1]
+    interpolated_color = tuple([int(c0 * (1 - t) + c1 * t) for c0, c1 in zip(color_start, color_end)])
+    return interpolated_color
+
+def fill_quadrilateral_with_radial_gradient(draw, vertices, colors):
+    """
+    방사형 그라데이션을 적용하여 사변형을 채웁니다.
+    vertices는 float 배열이며, 각 꼭지점의 색상으로 그라데이션을 적용합니다.
+    """
+    vertices = vertices.reshape(-1, 2)  # (4, 2) 형태로 재구성
+
+    # 중심점 계산 (사변형의 네 꼭지점의 평균)
+    center_x = np.mean([v[0] for v in vertices])
+    center_y = np.mean([v[1] for v in vertices])
+
+    # 정수로 변환된 좌표
+    vertices = np.array(vertices).astype(int)
+
+    # 사변형의 경계를 따라 색상 계산
+    min_x, min_y = vertices.min(axis=0)
+    max_x, max_y = vertices.max(axis=0)
+
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            if is_point_in_polygon((x, y), vertices):  # 점이 사변형 내부에 있는지 확인
+                color = radial_gradient_color(x, y, center_x, center_y, colors)
+                draw.point((x, y), fill=color)
+
+def is_point_in_polygon(point, polygon):
+    """
+    주어진 점이 다각형 내부에 있는지 확인하는 함수
+    """
+    x, y = point
+    n = len(polygon)
+    inside = False
+    p1x, p1y = polygon[0]
+    for i in range(n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside
+
+def remove_separator(img_np, vertices, labels):
+    """
+    labels가 2인 경우, 해당 사변형 영역을 그라데이션으로 덮어줍니다.
+    """
+    img = Image.fromarray(img_np)
+    draw = ImageDraw.Draw(img)
+
+    # 전체 이미지의 밝기 히스토그램을 분석하여 밝기 임계값 설정
+    hsv_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
+    brightness_values = hsv_img[:, :, 2].flatten()  # V 채널 값
+    brightness_threshold = np.percentile(brightness_values, 50)  # 상위 30% 밝기 기준
+
+    for idx, label in enumerate(labels):
+        if label == 2:  # separator인 경우
+            quad_vertices = vertices[idx]
+            # 각 꼭지점 주변의 바깥쪽 색상을 샘플링하여 평균을 구합니다.
+            sampled_colors = sample_outer_colors(img_np, quad_vertices, brightness_threshold)
+            # 그라데이션으로 사변형을 채웁니다.
+            fill_quadrilateral_with_radial_gradient(draw, quad_vertices, sampled_colors)
+
+    new_img = np.array(img)
+    return new_img, vertices
+
+import colorsys
+
+def generate_lines(image_np, vertices, labels, line_type, thickness=(1,5), gap=(0,4)):
+
+    def draw_line(image_np, line_type, gap, point, color):
+
+        start_point, end_point = point
+
+        if line_type == 'dotted':
+            gap += 1
+            for i in range(int(np.linalg.norm(np.subtract(end_point, start_point)) / gap)):
+                pos = (
+                    int(start_point[0] + i * gap * (end_point[0] - start_point[0]) / np.linalg.norm(np.subtract(end_point, start_point))),
+                    int(start_point[1] + i * gap * (end_point[1] - start_point[1]) / np.linalg.norm(np.subtract(end_point, start_point)))
+                )
+                cv2.circle(image_np, pos, thickness // 2, color, -1)
+        elif line_type == 'dashed': 
+            gap += 8
+            for i in range(0, int(np.linalg.norm(np.subtract(end_point, start_point)) / gap), 2):
+                pos1 = (
+                    int(start_point[0] + i * gap * (end_point[0] - start_point[0]) / np.linalg.norm(np.subtract(end_point, start_point))),
+                    int(start_point[1] + i * gap * (end_point[1] - start_point[1]) / np.linalg.norm(np.subtract(end_point, start_point)))
+                )
+                pos2 = (
+                    int(start_point[0] + (i + 1) * gap * (end_point[0] - start_point[0]) / np.linalg.norm(np.subtract(end_point, start_point))),
+                    int(start_point[1] + (i + 1) * gap * (end_point[1] - start_point[1]) / np.linalg.norm(np.subtract(end_point, start_point)))
+                )
+                cv2.line(image_np, pos1, pos2, color, thickness)
+        else:
+            cv2.line(image_np, start_point, end_point, color, thickness)
+
+        return image_np
+
+    def random_color(h=(0,360), s=(0,100), v=(0,100)):
+        """어두운 계통의 랜덤 색상을 생성하여 RGB 값으로 반환하는 함수"""
+        
+        # HSV 값 설정 (V는 0~20, S는 0~20, H는 0~360 랜덤)
+        h = random.uniform(h[0], h[1]) / 360
+        s = random.uniform(s[0], s[1]) / 100  # S를 0~1 범위로 조정
+        v = random.uniform(v[0], v[1]) / 100  # V를 0~1 범위로 조정
+        
+        # HSV를 RGB로 변환
+        r, g, b = colorsys.hsv_to_rgb(h, s, v)
+        
+        # RGB 값을 0~255 범위로 조정하여 반환
+        return int(r*255), int(g*255), int(b*255)
+    
+    thickness = random.randint(thickness[0], thickness[1])
+    line_type_list = ['dotted', 'dashed', 'line']
+
+    for vertice, label in zip(vertices, labels):
+        if label == 2:
+            points = vertice.reshape(-1,2)
+
+            start_point = int((points[0][0] + points[3][0])//2), int((points[0][1]+points[3][1])//2)
+            end_point = int((points[1][0] + points[2][0])//2), int((points[1][1]+points[2][1])//2)
+
+            line_type_per_line = line_type
+            if line_type_per_line == 'random':
+                line_type_per_line = random.choice(line_type_list)     
+
+            draw_line(image_np = image_np,
+                    line_type = line_type_per_line,
+                    gap = random.randint(gap[0], gap[1]),
+                    point = (start_point, end_point),
+                    color = random_color(s=(0,20), v=(0,20)))
+        
+    return image_np
