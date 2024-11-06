@@ -2,6 +2,7 @@ import pickle
 from tqdm import tqdm
 import os
 
+from torch.utils.data import Dataset
 from dataset import SceneTextDataset
 
 from aug import *
@@ -28,12 +29,12 @@ class PickleDataset(Dataset):
         return image
  
     def _train_augmentation(self, image, vertices, labels):
-        
         image = self._convert_to_rgb_numpy(image)
         
-        image, vertices = random_scale(image, vertices, scale_range=(0.5, 0.75))
+        image, vertices = random_scale(image, vertices, scale_range=(0.5, 1.0))
         image, vertices = rotate_img(image, vertices)
         image, vertices, labels = crop_img2(image, vertices, labels, self.input_image)
+
         vertices, labels = filter_vertices(
             vertices,labels,
             ignore_under=self.config_filter_vertices[0],
@@ -51,10 +52,13 @@ class PickleDataset(Dataset):
 
         image = self._convert_to_rgb_numpy(image)
 
-        # transform 적용
+        vertices = vertices.astype(np.float64)
+
+         # transform 적용
         if self.normalize is True:
             transform = A.Compose([A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
             image = transform(image=image)['image']
+       
 
         return image, vertices, labels
 
@@ -117,7 +121,7 @@ def createPickles(data_dir, data_type, image_size):
 def main():
     data_dir = './data'
 
-    createPickles(data_dir, 'valid', 2048)
+    createPickles(data_dir, 'valid', 1024)
     createPickles(data_dir, 'train', 2048)
     
         

@@ -14,9 +14,7 @@ class SceneTextDataset(Dataset):
                  image_size=2048,
                  crop_size=1024,
                  ignore_under_threshold=10,
-                 drop_under_threshold=1,
-                 color_jitter=False,
-                 normalize=True):
+                 drop_under_threshold=1):
         self._lang_list = ['chinese', 'japanese', 'thai', 'vietnamese']
         self.root_dir = root_dir
         self.data_type = data_type
@@ -37,7 +35,6 @@ class SceneTextDataset(Dataset):
         self.image_fnames = sorted(self.anno['images'].keys())
 
         self.image_size, self.crop_size = image_size, crop_size
-        self.color_jitter, self.normalize = color_jitter, normalize
 
         self.drop_under_threshold = drop_under_threshold
         self.ignore_under_threshold = ignore_under_threshold
@@ -87,7 +84,7 @@ class SceneTextDataset(Dataset):
             )
 
         image, vertices = longest_max_size_transform(image, vertices, self.image_size)
-        image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(0,0,0))
+        image, vertices = pad_if_needed(image, vertices, min_height = self.image_size, min_width = self.image_size, pad_value=(114,114,114))
 
         return image, vertices, labels
 

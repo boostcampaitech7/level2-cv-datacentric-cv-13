@@ -1,19 +1,7 @@
-import os.path as osp
 import math
-import json
-from PIL import Image
-
-import pickle
-import random
-import os
-
-import torch
 import numpy as np
-import cv2
-import albumentations as A
-from torch.utils.data import Dataset
-from shapely.geometry import Polygon
 from numba import njit
+from PIL import Image, ImageDraw
 
 @njit
 def cal_distance(x1, y1, x2, y2):
@@ -96,6 +84,34 @@ def rotate_vertices(vertices, angle, center):
         x, y = vertices[i] - center[0], vertices[i + 1] - center[1]
         rotated_vertices[i] = x * cos_theta - y * sin_theta + center[0]
         rotated_vertices[i + 1] = x * sin_theta + y * cos_theta + center[1]
+    return rotated_vertices
+
+@njit
+def rotate_vertices_numba(vertices, angle, center):
+    """Rotates vertices around a given center point.
+
+    Args:
+        vertices: A numpy array of shape (N, 8) representing N vertices.
+        angle: Rotation angle in radians.
+        center: A numpy array of shape (2,) representing the center point.
+
+    Returns:
+        A numpy array of shape (N, 8) representing the rotated vertices.
+    """
+
+    cos_angle = np.cos(angle)
+    sin_angle = np.sin(angle)
+    cx, cy = center
+
+    rotated_vertices = np.zeros_like(vertices)
+    for i in range(vertices.shape[0]):
+        x, y = vertices[i][::2], vertices[i][1::2]
+        dx, dy = x - cx, y - cy
+        rotated_x = dx * cos_angle - dy * sin_angle + cx
+        rotated_y = dx * sin_angle + dy * cos_angle + cy
+        rotated_vertices[i][::2] = rotated_x
+        rotated_vertices[i][1::2] = rotated_y
+
     return rotated_vertices
 
 @njit
@@ -257,25 +273,6 @@ def is_cross_text_bounding_box(start_loc, length, vertices):
     return (rect_min_x <= poly_max_x and poly_min_x <= rect_max_x) and \
            (rect_min_y <= poly_max_y and poly_min_y <= rect_max_y)
 
-def is_cross_text(start_loc, length, vertices):
-    if vertices.size == 0:
-        return False
-    start_w, start_h = start_loc
-    crop_box = np.array([
-        [start_w, start_h],
-        [start_w + length, start_h],
-        [start_w + length, start_h + length],
-        [start_w, start_h + length]
-    ])
-
-    p1 = Polygon(crop_box).convex_hull
-    for vertice in vertices:
-        p2 = Polygon(vertice.reshape((4, 2))).convex_hull
-        inter = p1.intersection(p2).area
-        if 0.01 <= inter / p2.area <= 0.99:
-            return True
-    return False
-
 @njit
 def polygon_area(vertices):
     """
@@ -324,3 +321,15 @@ def filter_vertices(vertices, labels, ignore_under=0, drop_under=0):
         new_vertices, new_labels = new_vertices[passed], new_labels[passed]
 
     return new_vertices, new_labels
+
+def visualize_bbox(img, bboxes):
+    img = img.permute(1, 2, 0).numpy().astype(np.uint8)
+    img = Image.fromarray(img)  # [C, H, W] -> [H, W, C]로 변환
+
+    draw = ImageDraw.Draw(img)
+    for bbox in bboxes:
+        # bbox points
+        pts = [(int(p[0]), int(p[1])) for p in bbox]
+        draw.polygon(pts, outline=(255, 0, 0))
+
+    return img

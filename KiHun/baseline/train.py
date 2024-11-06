@@ -1,25 +1,20 @@
 import os
-import torch
 import numpy as np
-import cv2
 
-import math
-import matplotlib.pyplot as plt
-
-from torch import cuda
 from torch.utils.data import DataLoader
 
 from east_dataset import EASTDataset
 from dataset_pickle import PickleDataset, load_pickle_files
 
-from detect import get_bboxes
-
 from model_lightning import EASTLightningModel
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 
 from argparse import ArgumentParser
 
-from PIL import Image, ImageDraw
+from detect import get_bboxes
+
+from utils import visualize_bbox
 
 import wandb
 
@@ -28,7 +23,7 @@ import shutil
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument('--train_dataset_dir', type=str,default="./data/pickle/2048/train")  
-    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/2048/valid")  
+    parser.add_argument('--valid_dataset_dir', type=str,default="./data/pickle/1024/valid")  
     # Conventional args
     '''parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', 'data'))'''
@@ -40,12 +35,12 @@ def parse_args():
     parser.add_argument('--checkpoint_dir', type=str,default="./trained_models")  
 
     parser.add_argument('--train_num_workers', type=int, default=8)
-    parser.add_argument('--valid_num_workers', type=int, default=4)
+    parser.add_argument('--valid_num_workers', type=int, default=8)
 
     parser.add_argument('--image_size', type=int, default=2048)
     parser.add_argument('--input_size', type=int, default=1024)
     parser.add_argument('--train_batch_size', type=int, default=8)
-    parser.add_argument('--valid_batch_size', type=int, default=4)
+    parser.add_argument('--valid_batch_size', type=int, default=8)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=150)
     #parser.add_argument('--save_interval', type=int, default=5)
@@ -60,14 +55,6 @@ def parse_args():
 
     return args
 
-def wandb_setup(config):
-    run_name = config.pop('run_name', None)  # 'run_name'이 있으면 가져오고 없으면 None
-    
-    wandb.init(
-        project="project3_test_run",
-        name=run_name,  # run_name이 None이면 wandb에서 자동으로 무시
-        config=config
-    )
 
 def check_dataloader(dataloader):
 
@@ -93,17 +80,10 @@ def check_dataloader(dataloader):
             else:
                 bboxes = bboxes[:, :8].reshape(-1, 4, 2)
 
-            image_sample = image.permute(1, 2, 0).numpy().astype(np.uint8)
-            image_sample = Image.fromarray(image_sample)  # [C, H, W] -> [H, W, C]로 변환
-
-            draw = ImageDraw.Draw(image_sample)
-            for bbox in bboxes:
-                # bbox points
-                pts = [(int(p[0]), int(p[1])) for p in bbox]
-                draw.polygon(pts, outline=(255, 0, 0))                
-
+            visualized_result = visualize_bbox(image, bboxes)
+ 
             image_name = f'{batch_idx*dataloader.batch_size+image_idx}th_aug_image.png'
-            image_sample.save(os.path.join(save_dir, image_name))
+            visualized_result.save(os.path.join(save_dir, image_name))
             print(f"Created: {image_name}")
 
 def main():
@@ -123,28 +103,34 @@ def main():
     val_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, num_workers=args.valid_num_workers, shuffle=False)
 
     if args.checkaug:
-        check_dataloader(train_loader)
+        check_dataloader(val_loader)
         return
 
     model = EASTLightningModel(
         args.image_size, 
         args.input_size, 
         args.learning_rate, 
-        args.max_epoch,
-        args.nowandb)
+        args.max_epoch)
     
+    wandb_logger = None
+    if not args.nowandb:
+        config = args.__dict__
+        run_name = config.pop('run_name', None)  # 'run_name'이 있으면 가져오고 없으면 None
+
+        wandb_logger = WandbLogger(project='project3_test_run', name=run_name, config=config)
+
     trainer = pl.Trainer(
+        logger=wandb_logger,
         default_root_dir=args.checkpoint_dir,
         max_epochs=args.max_epoch,
         devices=1,
         accelerator="gpu",
-        check_val_every_n_epoch=5,
+        check_val_every_n_epoch=25,
         num_sanity_val_steps=0,
-        precision=16 if args.amp else 32  # AMP를 위한 precision 설정
+        log_every_n_steps=1,
+        precision="16-mixed" if args.amp else 32  # AMP를 위한 precision 설정
     )
 
-    if not args.nowandb:
-        wandb_setup(args.__dict__)
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
     if not args.nowandb:
             wandb.finish()

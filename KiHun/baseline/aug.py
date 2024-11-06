@@ -178,63 +178,50 @@ def crop_img2(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray, lengt
 
     return cropped_image, new_vertices, labels
 
-
-@njit
-def crop_img(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray, length: int):
-    h, w = image.shape[:2]
-
-    # 이미지 크기가 지정한 길이 이상이 되도록 조정
+def crop_img(img, vertices, labels, length):
+    '''crop img patches to obtain batch and augment
+    Input:
+        img         : PIL Image
+        vertices    : vertices of text regions <numpy.ndarray, (n,8)>
+        labels      : 1->valid, 0->ignore, <numpy.ndarray, (n,)>
+        length      : length of cropped image region
+    Output:
+        region      : cropped image region
+        new_vertices: new vertices in cropped region
+    '''
+    h, w = img.height, img.width
+    # confirm the shortest side of image >= length
     if h >= w and w < length:
-        new_w, new_h = length, int(h * length / w)
+        img = img.resize((length, int(h * length / w)), Image.BILINEAR)
     elif h < w and h < length:
-        new_w, new_h = int(w * length / h), length
-    else:
-        new_w, new_h = w, h
+        img = img.resize((int(w * length / h), length), Image.BILINEAR)
+    ratio_w = img.width / w
+    ratio_h = img.height / h
+    assert(ratio_w >= 1 and ratio_h >= 1)
 
-    # NumPy로 크기 조정: 선형 보간을 직접 계산
-    resized_image = np.zeros((new_h, new_w, image.shape[2]), dtype=image.dtype)
-    scale_x, scale_y = w / new_w, h / new_h
-    for i in range(new_h):
-        for j in range(new_w):
-            resized_image[i, j] = image[int(i * scale_y), int(j * scale_x)]
-    
-    ratio_w, ratio_h = new_w / w, new_h / h
+    new_vertices = np.zeros(vertices.shape)
+    if vertices.size > 0:
+        new_vertices[:,[0,2,4,6]] = vertices[:,[0,2,4,6]] * ratio_w
+        new_vertices[:,[1,3,5,7]] = vertices[:,[1,3,5,7]] * ratio_h
 
-    # vertices의 x, y 좌표에 각각 ratio_w, ratio_h 적용
-    new_vertices = vertices.copy()
-    for i in range(vertices.shape[0]):
-        # x 좌표들에 대해 ratio_w 적용
-        new_vertices[i, 0] *= ratio_w  # x1
-        new_vertices[i, 2] *= ratio_w  # x2
-        new_vertices[i, 4] *= ratio_w  # x3
-        new_vertices[i, 6] *= ratio_w  # x4
-        # y 좌표들에 대해 ratio_h 적용
-        new_vertices[i, 1] *= ratio_h  # y1
-        new_vertices[i, 3] *= ratio_h  # y2
-        new_vertices[i, 5] *= ratio_h  # y3
-        new_vertices[i, 7] *= ratio_h  # y4
-
-    # 크롭할 영역 위치 선택
-    remain_w, remain_h = new_w - length, new_h - length
-    for _ in range(1000):
+    # find random position
+    remain_h = img.height - length
+    remain_w = img.width - length
+    flag = True
+    cnt = 0
+    while flag and cnt < 1000:
+        cnt += 1
         start_w = int(np.random.rand() * remain_w)
         start_h = int(np.random.rand() * remain_h)
-        if not is_cross_text_bounding_box([start_w, start_h], length, new_vertices[labels == 1]):
-            break
-    cropped_image = resized_image[start_h:start_h + length, start_w:start_w + length]
+        flag = is_cross_text_bounding_box([start_w, start_h], length, new_vertices[labels==1,:])
+    box = (start_w, start_h, start_w + length, start_h + length)
+    region = img.crop(box)
+    if new_vertices.size == 0:
+        return region, new_vertices
 
-    # vertices를 크롭된 이미지 기준으로 변환
-    for i in range(new_vertices.shape[0]):
-        new_vertices[i, 0] -= start_w  # x1
-        new_vertices[i, 2] -= start_w  # x2
-        new_vertices[i, 4] -= start_w  # x3
-        new_vertices[i, 6] -= start_w  # x4
-        new_vertices[i, 1] -= start_h  # y1
-        new_vertices[i, 3] -= start_h  # y2
-        new_vertices[i, 5] -= start_h  # y3
-        new_vertices[i, 7] -= start_h  # y4
-
-    return cropped_image, new_vertices
+    new_vertices[:,[0,2,4,6]] -= start_w
+    new_vertices[:,[1,3,5,7]] -= start_h
+    return region, new_vertices
 
 @njit
 def rotate_img(image: np.ndarray, vertices: np.ndarray, angle_range=10):
