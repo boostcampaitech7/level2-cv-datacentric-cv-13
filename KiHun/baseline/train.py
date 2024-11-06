@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--max_epoch', type=int, default=150)
     #parser.add_argument('--save_interval', type=int, default=5)
-    parser.add_argument("--amp", action="store_true", help="Enable AMP")
+    parser.add_argument("--skip_valid", action="store_true", help="skip validation")
     parser.add_argument("--checkaug", action="store_true", help="check aug")
     parser.add_argument("--nowandb", action="store_true", help="disable wandb")
 
@@ -90,7 +90,7 @@ def main():
     args = parse_args()
 
     #train과 valid 경로의 파일을 각각 나눔
-    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir, args.split_seed)
+    train_files, valid_files = load_pickle_files(args.train_dataset_dir, args.valid_dataset_dir, args.split_seed, train_ratio = 1.0 if args.skip_valid else 0.8)
 
     train_pickle = PickleDataset(file_list=train_files, data_type='train', input_image=args.input_size, normalize=not args.checkaug)
     valid_pickle = PickleDataset(file_list=valid_files, data_type='valid', input_image=args.image_size, normalize=not args.checkaug)
@@ -100,7 +100,7 @@ def main():
 
     # DataLoader 설정
     train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=args.train_num_workers, shuffle=True)
-    val_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, num_workers=args.valid_num_workers, shuffle=False)
+    val_loader = None if args.skip_valid else DataLoader(valid_dataset, batch_size=args.valid_batch_size, num_workers=args.valid_num_workers, shuffle=False)
 
     if args.checkaug:
         check_dataloader(val_loader)
@@ -126,9 +126,8 @@ def main():
         devices=1,
         accelerator="gpu",
         check_val_every_n_epoch=25,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=1,
         log_every_n_steps=1,
-        precision="16-mixed" if args.amp else 32  # AMP를 위한 precision 설정
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)

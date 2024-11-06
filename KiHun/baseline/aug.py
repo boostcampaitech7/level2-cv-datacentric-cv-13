@@ -130,6 +130,77 @@ def longest_max_size_transform(img, vertices, size):
     new_vertices = vertices * ratio
     return img, new_vertices
 
+from PIL import Image, ImageDraw
+
+def sample_outer_colors(img_np, vertices, brightness_threshold):
+    """
+    각 꼭지점 및 변 중간 지점에서 밝기 임계값을 사용해 배경에 가까운 색상을 샘플링합니다.
+    """
+    height, width, _ = img_np.shape
+    sampled_colors = []
+
+    vertices = vertices.reshape(-1, 2)  # (4, 2) 형태로 변환
+
+    for i, (x, y) in enumerate(vertices):
+        # 각 꼭지점 주변의 여러 샘플링 좌표 계산 (더 많은 지점 샘플링)
+        offset_coords = [
+            (max(0, int(x - 10)), int(y)), (min(width - 1, int(x + 10)), int(y)),
+            (int(x), max(0, int(y - 10))), (int(x), min(height - 1, int(y + 10)))
+        ]
+
+        # 각 점에서 색상 샘플링
+        colors = [img_np[oy, ox] for ox, oy in offset_coords if 0 <= ox < width and 0 <= oy < height]
+        
+        # HSV 변환하여 밝기 기준으로 필터링
+        hsv_colors = [cv2.cvtColor(np.uint8([[color]]), cv2.COLOR_RGB2HSV)[0][0] for color in colors]
+        bright_colors = [colors[j] for j, hsv in enumerate(hsv_colors) if hsv[2] > brightness_threshold]
+
+        # 배경 색상으로 간주할 수 있는 중간 밝기 색상의 평균값 계산
+        avg_color = np.mean(bright_colors if bright_colors else colors, axis=0)
+        sampled_colors.append(tuple(avg_color.astype(int)))
+
+    return sampled_colors
+
+def fill_quadrilateral_with_gradient(draw, vertices, colors):
+    """
+    각 꼭짓점과 변 중간 지점에서 자연스러운 그라데이션을 적용해 사변형을 채웁니다.
+    """
+    vertices = vertices.reshape(-1, 2)
+
+    # 각 변의 중간 지점 샘플링
+    midpoints = [(int((vertices[i][0] + vertices[(i + 1) % 4][0]) / 2),
+                  int((vertices[i][1] + vertices[(i + 1) % 4][1]) / 2)) for i in range(4)]
+    
+    for i in range(4):
+        start = vertices[i]
+        end = vertices[(i + 1) % 4]
+        mid_color_start = colors[i]
+        mid_color_end = colors[(i + 1) % 4]
+
+        # 선형 그라데이션을 각 변에서 적용
+        for t in np.linspace(0, 1, 50):  # 그라데이션 세밀도 조정
+            xt = int(start[0] * (1 - t) + end[0] * t)
+            yt = int(start[1] * (1 - t) + end[1] * t)
+            interpolated_color = tuple([int(c0 * (1 - t) + c1 * t) for c0, c1 in zip(mid_color_start, mid_color_end)])
+            draw.point((xt, yt), fill=interpolated_color)
+
+def remove_separator(img, vertices, labels):
+    """
+    labels가 2인 경우, 해당 사변형 영역을 그라데이션으로 덮어줍니다.
+    """
+    img_copy = img.copy()
+    draw = ImageDraw.Draw(img_copy)
+
+    for idx, label in enumerate(labels):
+        if label == 2:  # separator인 경우
+            quad_vertices = vertices[idx]
+            # 각 꼭지점 주변의 바깥쪽 색상을 샘플링하여 평균을 구합니다.
+            sampled_colors = sample_outer_colors(img, quad_vertices)
+            # 그라데이션으로 사변형을 채웁니다.
+            fill_quadrilateral_with_gradient(draw, quad_vertices, sampled_colors)
+
+    return img_copy 
+
 @njit
 def crop_img2(image: np.ndarray, vertices: np.ndarray, labels: np.ndarray, length: int):
     h, w = image.shape[:2]
@@ -224,7 +295,7 @@ def crop_img(img, vertices, labels, length):
     return region, new_vertices
 
 @njit
-def rotate_img(image: np.ndarray, vertices: np.ndarray, angle_range=10):
+def rotate_img(image: np.ndarray, vertices: np.ndarray, angle_range=15):
     h, w = image.shape[:2]
     angle = angle_range * (np.random.rand() * 2 - 1)
     radian = angle * np.pi / 180

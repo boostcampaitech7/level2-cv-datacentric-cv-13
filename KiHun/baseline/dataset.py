@@ -69,7 +69,12 @@ class SceneTextDataset(Dataset):
             if num_pts > 4:
                 continue
             vertices.append(np.array(word_info['points']).flatten())
-            labels.append(1)
+
+            if word_info.get("transcription") == "seperator":
+                labels.append(2) 
+            else:
+                labels.append(1)
+
         vertices, labels = np.array(vertices, dtype=np.float32), np.array(labels, dtype=np.int64)
         return vertices, labels
 

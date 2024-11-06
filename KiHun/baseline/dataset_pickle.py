@@ -41,10 +41,12 @@ class PickleDataset(Dataset):
             drop_under=self.config_filter_vertices[1]
         )
         
+        transform = [A.ColorJitter(hue=(-0.05,0.05), brightness=(0.75, 1.25), contrast=(0.75, 1.25), saturation=(0.6, 0.75))]
         # transform 적용
         if self.normalize is True:
-            transform = A.Compose([A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-            image = transform(image=image)['image']
+            transform.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+
+        image = A.Compose(transform)(image=image)['image']
 
         return image, vertices, labels
 
