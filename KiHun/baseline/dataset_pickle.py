@@ -40,7 +40,9 @@ class PickleDataset(Dataset):
             ignore_under=self.config_filter_vertices[0],
             drop_under=self.config_filter_vertices[1]
         )
-        
+
+        image, vertices, labels = generate_lines(image, vertices, labels)
+
         transform = [A.ColorJitter(hue=(-0.05,0.05), brightness=(0.75, 1.25), contrast=(0.75, 1.25), saturation=(0.6, 0.75))]
         # transform 적용
         if self.normalize is True:
@@ -123,7 +125,7 @@ def createPickles(data_dir, data_type, image_size):
 def main():
     data_dir = './data'
 
-    createPickles(data_dir, 'valid', 1024)
+    #createPickles(data_dir, 'valid', 1024)
     createPickles(data_dir, 'train', 2048)
     
         
